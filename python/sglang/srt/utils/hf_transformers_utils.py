@@ -296,6 +296,15 @@ def get_config(
                     revision=revision,
                     **kwargs,
                 )
+            elif "deepseek_v4" in str(e):
+                config = _load_deepseek_temp_model(
+                    model,
+                    model_type="deepseek_ref",
+                    architecture="DeepseekV4ForCausalLM",
+                    trust_remote_code=trust_remote_code,
+                    revision=revision,
+                    **kwargs,
+                )
             else:
                 raise e
 
