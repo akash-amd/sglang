@@ -36,26 +36,26 @@ set -euo pipefail
 
 PORT="${PORT:-30010}"
 MODEL="${MODEL:-/hf/DeepSeek-V4-Pro-srt}"
-MEM_FRACTION="${MEM_FRACTION_OVERRIDE:-0.77}"   # Lowered to leave headroom for warmup + inference activations
-MAX_RUNNING_REQ="${MAX_RUNNING_REQ:-2}"
+MEM_FRACTION="${MEM_FRACTION_OVERRIDE:-0.77}"   # Leave headroom for cuda graph capture + inference
+MAX_RUNNING_REQ="${MAX_RUNNING_REQ:-4}"
 CONTEXT_LEN="${CONTEXT_LEN:-1048576}"
 INDEXER_CAP="${INDEXER_CAP:-4096}"
 CUDA_GRAPH_BS="${CUDA_GRAPH_BS:-1 2 4}"
 
-export PYTHONPATH=/sgl-pr/python:${PYTHONPATH:-}
+export PYTHONPATH=/sgl-workspace/sglang/python:${PYTHONPATH:-}
 export MAX_JOBS=128
 # Packed mxfp4 path — required for Pro to fit on 288 GB / GPU.
 export SGLANG_MXFP4_AITER=1
-# Compressor + indexer (matches Flash-Base / Pro-Base setup).
-export SGLANG_OPT_USE_FUSED_COMPRESS=false
-export SGLANG_OPT_USE_OLD_COMPRESSOR=false
+# Fused compress + old compressor (aligned with InferenceX config).
+export SGLANG_OPT_USE_FUSED_COMPRESS=true
+export SGLANG_OPT_USE_OLD_COMPRESSOR=true
 export SGLANG_OPT_USE_TILELANG_SWA_PREPARE=false
 export SGLANG_OPT_USE_JIT_KERNEL_FUSED_TOPK=false
 export SGLANG_OPT_USE_FUSED_HASH_TOPK=false
-export SGLANG_HACK_FLASHMLA_BACKEND=torch
-# CK V32 sparse MLA decode disabled to avoid OOM on Pro with tight memory.
-export SGLANG_HIP_SPARSE_MLA_DECODE_FP8=0
-export SGLANG_HIP_CK_V32_TWO_SHOT=0
+export SGLANG_HACK_FLASHMLA_BACKEND=tilelang
+# CK V32 sparse MLA decode enabled (required for profiling).
+export SGLANG_HIP_SPARSE_MLA_DECODE_FP8=1
+export SGLANG_HIP_CK_V32_TWO_SHOT=1
 
 # Phase E (2026-04-28) — same combine-kernel gates as Flash-Base / Pro-Base.
 # Pro-mxfp4 routes through the same sparse MLA combine path. See
@@ -68,28 +68,32 @@ export SGLANG_CK_V32_TRITON_COMBINE_NUM_WARPS="${SGLANG_CK_V32_TRITON_COMBINE_NU
 export SGLANG_OPT_DEEPGEMM_HC_PRENORM=false
 export SGLANG_OPT_USE_TILELANG_MHC_PRE=false
 export SGLANG_OPT_USE_TILELANG_MHC_POST=false
+export SGLANG_OPT_USE_AITER_MHC_PRE=true
+export SGLANG_OPT_USE_AITER_MHC_POST=true
 export SGLANG_ENABLE_THINKING=1
 export SGLANG_USE_AITER=1
 export SGLANG_USE_ROCM700A=1
 export SGLANG_TOPK_TRANSFORM_512_TORCH=0
-export SGLANG_FP8_PAGED_MQA_LOGITS_TORCH=0
+export SGLANG_FP8_PAGED_MQA_LOGITS_TORCH=1
 export SGLANG_FP8_PAGED_MQA_LOGITS_AITER=1
 # Opt out of the fused-triton default — on Pro shapes the aiter
 # `_deepgemm_fp8_paged_mqa_logits` (240 ms / call) beats fused-triton
 # (876 ms / call). See dsv4-bottleneck-analysis.md.
 export SGLANG_FP8_PAGED_MQA_LOGITS_FUSED_TRITON=0
-export SGLANG_DSV4_FP4_EXPERTS=false
+export SGLANG_DSV4_FP4_EXPERTS=True
 export SGLANG_OPT_DPSK_V4_RADIX=0
 export SGLANG_OPT_USE_OVERLAP_STORE_CACHE=false
 export SGLANG_OPT_USE_FUSED_STORE_CACHE=false
 # mxfp4 routed experts use the aiter path; FORCE_TRITON_MOE_FP8 doesn't apply.
 export SGLANG_FORCE_TRITON_MOE_FP8=0
+export SGLANG_OPT_USE_TILELANG_INDEXER=false
+export SGLANG_OPT_USE_TRITON_SWA_PREPARE=true
 export SGLANG_OPT_USE_MULTI_STREAM_OVERLAP=0
 export SGLANG_INDEXER_MAX_SEQ_LEN="$INDEXER_CAP"
 export TORCH_COMPILE_DISABLE="${TORCH_COMPILE_DISABLE:-1}"
 export TORCHINDUCTOR_DISABLE="${TORCHINDUCTOR_DISABLE:-1}"
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-DISABLE_CUDA_GRAPH="${DISABLE_CUDA_GRAPH:-1}"
+DISABLE_CUDA_GRAPH="${DISABLE_CUDA_GRAPH:-}"
 
 echo "==================================================================="
 echo "Pro-mxfp4 launcher  (TP=8 EP=8 packed-mxfp4 path)"
@@ -104,8 +108,8 @@ exec python3 -m sglang.launch_server \
   --mem-fraction-static "$MEM_FRACTION" \
   --host 0.0.0.0 --disable-shared-experts-fusion \
   --tool-call-parser deepseekv4 --reasoning-parser deepseek-v4 \
-  --skip-server-warmup --watchdog-timeout 1800 \
-  --tp 8 --ep-size 8 --cuda-graph-bs $CUDA_GRAPH_BS \
+  --watchdog-timeout 1800 \
+  --tp 8 --ep-size 8 --cuda-graph-max-bs 4 --cuda-graph-bs $CUDA_GRAPH_BS \
   --num-continuous-decode-steps "${NUM_DECODE_STEPS:-1}" \
   ${ENABLE_PIECEWISE_CG:+--enable-piecewise-cuda-graph} \
   ${PIECEWISE_TOKENS:+--piecewise-cuda-graph-tokens $PIECEWISE_TOKENS} \

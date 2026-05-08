@@ -6,7 +6,7 @@
     --dataset-name random \
     --random-input-len 1024 --random-output-len 1024 \
     --random-range-ratio 0.8 \
-    --num-prompts 10 --max-concurrency 1 \
+    --num-prompts 10 --max-concurrency 4 \
     --request-rate inf \
     --warmup-requests 8 \
     --seed 1 \
